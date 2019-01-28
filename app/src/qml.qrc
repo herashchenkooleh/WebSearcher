@@ -1,5 +1,7 @@
 <RCC>
   <qresource>
     <file>main.qml</file>
+    <file>qtquickcontrols2.conf</file>
+    <file>DataItemDelegate.qml</file>
   </qresource>
 </RCC>

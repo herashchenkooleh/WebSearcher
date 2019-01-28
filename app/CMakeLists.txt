@@ -1,4 +1,4 @@
-include_directories(${Qt5Widgets_INCLUDE_DIRS} ${QtQml_INCLUDE_DIRS})
+include_directories(${Qt5Widgets_INCLUDE_DIRS} ${QtQml_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/inc ${CORE_INCLUDE_DIR})
 add_definitions(${Qt5Widgets_DEFINITIONS} ${QtQml_DEFINITIONS} ${${Qt5Quick_DEFINITIONS}})
 qt5_add_resources(QT_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/qml.qrc)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${Qt5Widgets_EXECUTABLE_COMPILE_FLAGS}")
@@ -22,12 +22,14 @@ target_link_libraries(WebSearcher
     Qt5::Network
     Qt5::Quick
 	Qt5::QuickControls2
+    Qt5::WebView
+	WebSearcherCore
 )
 
 if(TARGET Qt5::windeployqt)
     add_custom_command(TARGET WebSearcher
         POST_BUILD
         COMMAND set PATH=%PATH%$<SEMICOLON>${qt5_install_prefix}/bin
-        COMMAND Qt5::windeployqt --qmldir "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+        COMMAND Qt5::windeployqt --qmldir "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/bin/$<CONFIG>"
     )
 endif()
