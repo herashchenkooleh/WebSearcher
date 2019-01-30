@@ -1,43 +1,13 @@
 #include "Dispatcher.hpp"
+#include "UrlLoadTask.hpp"
 
 Dispatcher::Dispatcher()
-	: mProgressStep(0.0f)
-	, mTotalProgress(0.0f)
 {
+	UrlLoadTask::init();
 }
 
 Dispatcher::~Dispatcher()
 {
-}
-
-void Dispatcher::executeSearch(const size_t numThread, const size_t searchDepth,
-								const std::string& url, const std::string& searchText)
-{
-	if (!WebSite::isValidHRef(url))
-	{
-		return;
-	}
-
-	updateProgress(0.0f);
-	auto numSites = searchDepth;
-	mThreadPool = std::make_shared<ThreadPool>(numThread);
-
-	mWebSites.clear();
-
-	std::queue<WebSite::Ptr> urls;
-	mProgressStep = 0.5f / (float)searchDepth;
-	auto site = std::make_shared<WebSite>(mThreadPool, url, mProgressStep);
-	site->load([&](const float value)
-	{
-		addProgress(value);
-	});
-	urls.push(site);
-	mWebSites[url] = site;
-
-	loadWebSites(numSites, urls);
-	updateProgress(0.5f);
-	searchOnWebSites(searchText);
-	updateProgress(1.0f);
 }
 
 void Dispatcher::setProgressCallback(ProgressCallback callback)
@@ -47,7 +17,6 @@ void Dispatcher::setProgressCallback(ProgressCallback callback)
 
 void Dispatcher::addProgress(const float value)
 {
-	std::lock_guard<std::mutex> lock(mAddProgressMutex);
 	mTotalProgress += value;
 	if (mProgressCallback != nullptr)
 	{
@@ -64,50 +33,116 @@ void Dispatcher::updateProgress(const float value)
 	}
 }
 
-void Dispatcher::loadWebSites(size_t& searchDepth, std::queue<WebSite::Ptr>& urls)
+void Dispatcher::executeSearch(const size_t numThread, const size_t searchDepth,
+	const std::string& url, const std::string& searchText,
+	WebSite::ChangeStatusCallback callback)
 {
-	if (searchDepth == 0 || urls.empty())
+	updateProgress(0.0f);
+	if (!WebSite::isValidHRef(url))
 	{
+		updateProgress(1.0f);
 		return;
 	}
 
-	auto webSite = urls.front();
-	urls.pop();
+	mProgressStep = 1.0f / (searchDepth * 3);
 
-	auto children = webSite->getChildUrls();
-	for (const auto& child : children)
+	mThreadPool = std::make_shared<ThreadPool>(numThread);
+
+	mWebSites[url] = std::make_shared<WebSite>(url, searchText, callback);
+	SitesList sites = { mWebSites[url] };
+	auto localSearchDepth = searchDepth != 0 ? searchDepth - 1 : 0;
+	loadWebSites(localSearchDepth, sites, searchText, callback);
+
+	for (auto& item: mWebSites)
 	{
-		auto itr = mWebSites.find(child);
-		if (itr == mWebSites.end() && WebSite::isValidHRef(child))
+		auto site = item.second;
+		mThreadPool->enqueue([&, site]()
 		{
-			--searchDepth;
-			if (searchDepth == 0)
-			{
-				break;
-			}
-
-			auto site = std::make_shared<WebSite>(mThreadPool, child, mProgressStep);
-			site->load([&](const float value)
-			{
-				addProgress(value);
-			});
-			urls.push(site);
-			mWebSites[child] = site;
-		}
+			site->searchText();
+			addProgress(mProgressStep);
+		});
 	}
 
-	loadWebSites(searchDepth, urls);
+	updateProgress(1.0f);
 }
 
-void Dispatcher::searchOnWebSites(const std::string& searchText)
+void Dispatcher::loadWebSites(size_t& searchDepth, SitesList& sites,
+							const std::string& searchText,
+							WebSite::ChangeStatusCallback callback)
 {
-	for (auto& site: mWebSites)
+	if (searchDepth == 0)
 	{
-		site.second->searchText(searchText,
-			[&](const float value)
+		return;
+	}
+	while (!sites.empty())
+	{
+		std::vector<std::future<std::string>> loadResults;
+		for (auto& site : sites)
+		{
+			loadResults.push_back(mThreadPool->enqueue([&, site]()
 			{
-				addProgress(value);
+				site->load();
+				addProgress(mProgressStep);
+				return site->getUrl();
+			}));
+		}
+
+		std::vector<std::future<std::string>> parseResults;
+
+		do
+		{
+			auto removeFunc = [&](std::future<std::string>& future)
+			{
+				auto status = future.wait_for(std::chrono::milliseconds(100));
+				if (status == std::future_status::ready)
+				{
+					auto item = mWebSites[future.get()];
+					parseResults.push_back(mThreadPool->enqueue([&, item]()
+					{
+						item->parse();
+						addProgress(mProgressStep);
+						return item->getUrl();
+					}));
+
+					return true;
+				}
+
+				return false;
+			};
+
+			const auto& newEnd = std::remove_if(std::begin(loadResults),
+												std::end(loadResults), removeFunc);
+			loadResults.erase(newEnd, loadResults.end());
+		} while (!loadResults.empty());
+
+		if (searchDepth == 0)
+		{
+			break;
+		}
+
+		sites.clear();
+		for (auto& future : parseResults)
+		{
+			future.wait();
+			auto site = mWebSites[future.get()];
+			for (auto& child : site->getChildren())
+			{
+				auto item = mWebSites.find(child);
+				if (item == mWebSites.end())
+				{
+					auto webSite = std::make_shared<WebSite>(child,
+															searchText,
+															callback);
+					mWebSites[child] = webSite;
+					sites.push_back(webSite);
+
+					searchDepth -= 1;
+					if (searchDepth == 0)
+					{
+						break;
+					}
+				}
 			}
-		);
+		}
 	}
 }

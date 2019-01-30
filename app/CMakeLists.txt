@@ -24,6 +24,7 @@ target_link_libraries(WebSearcher
 	Qt5::QuickControls2
     Qt5::WebView
 	WebSearcherCore
+    rapidxml
 )
 
 if(TARGET Qt5::windeployqt)

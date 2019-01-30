@@ -1,14 +1,17 @@
 #pragma once
 
 #include <functional>
+#include <set>
 #include <map>
 #include "ThreadPool.hpp"
+#include "rapidxml.hpp"
 
 class WebSite
 {
 public:
 	enum WebSiteStatus
 	{
+		CREATED,
 		LOAD,
 		LOADED,
 		PARSE,
@@ -21,46 +24,43 @@ public:
 
 	using Ptr = std::shared_ptr<WebSite>;
 
-public:
-	WebSite(ThreadPool::Ptr threadPool, const std::string& url, const float progress);
+	using Children = std::vector<std::string>;
 
-	using CreateCallback = std::function<void(const std::string&)>;
 	using ChangeStatusCallback = std::function<void(const std::string&,
 													const WebSiteStatus,
 													const std::string&)>;
-	using LoadedCallback = std::function<void(const float)>;
-	using FoundCallback = std::function<void(const float)>;
+
+public:
+	WebSite(const std::string& url,
+			const std::string& searchText,
+			ChangeStatusCallback callback);
 
 	static bool isValidHRef(const std::string& str);
 
-	static void setCreateCallback(CreateCallback);
-	static void setChangeStatusCallback(ChangeStatusCallback);
+	bool load();
+	bool parse();
+	void searchText();
 
-	static void callCreateCallback(const std::string&);
-	static void callChangeStatusCallback(const std::string&, const WebSiteStatus, const std::string&);
+	Children& getChildren();
 
-	void load(LoadedCallback callback);
+	const std::string& getUrl() const;
 
-	std::vector<std::string> getChildUrls() const;
-
-	void searchText(const std::string& searchText, FoundCallback callback);
+protected:
+	void parse(const rapidxml::xml_node<>* node);
+	void callCallback();
+	void removeHtmlComments();
 
 private:
-	static CreateCallback sCreateCallback;
-	static ChangeStatusCallback sChangeStatusCallback;
+	ChangeStatusCallback mChangeStatusCallback;
 
-	LoadedCallback mLoadedCallback;
-	FoundCallback mFoundCallback;
+	std::string mSearchText;
 
-	ThreadPool::Ptr mThreadPool;
 	std::string mUrl;
-	mutable std::future<std::string> result;
-	mutable std::string mData;
+	std::string mData;
+	std::string mParsedData;
 
-	mutable bool mParsed;
-	mutable WebSiteStatus mStatus;
+	WebSiteStatus mStatus;
+	std::string mErrorDescripton;
 
-	mutable std::string mErrorDescripton;
-
-	float mProgress;
+	Children mChildren;
 };

@@ -1,25 +1,30 @@
 #include "WebSite.hpp"
 #include "UrlLoadTask.hpp"
-#include <iostream>
 #include <regex>
-#include "rapidxml.hpp"
 #include <chrono>
+#include <iostream>
 
 static constexpr const char* HREF_SIGNATURE = "href";
 
-std::vector<std::string> walk(const rapidxml::xml_node<>* node, std::string& data)
+/*static*/ bool WebSite::isValidHRef(const std::string& str)
+{
+	auto result = std::regex_match(str, std::regex("(http|https)://([^/ :]+):?([^/ ]*)(/?[^ #?]*)\\x3f?([^ #]*)#?([^ ]*)"));
+
+	return result;
+}
+
+void WebSite::parse(const rapidxml::xml_node<>* node)
 {
 	if (node == nullptr)
 	{
-		return {};
+		return;
 	}
 
 	if (node->value_size() != 0)
 	{
-		data.append(node->value());
+		mParsedData.append(node->value());
 	}
 
-	std::vector<std::string> result;
 	for (const rapidxml::xml_attribute<>* a = node->first_attribute()
 		; a
 		; a = a->next_attribute()
@@ -28,7 +33,10 @@ std::vector<std::string> walk(const rapidxml::xml_node<>* node, std::string& dat
 		if (std::strcmp(a->name(), HREF_SIGNATURE) == 0)
 		{
 			auto value = std::string(a->value());
-			result.push_back(value);
+			if (isValidHRef(value))
+			{
+				mChildren.push_back(value);
+			}
 		}
 	}
 
@@ -37,182 +45,133 @@ std::vector<std::string> walk(const rapidxml::xml_node<>* node, std::string& dat
 		; n = n->next_sibling()
 		)
 	{
-		auto localResult = std::move(walk(n, data));
-		std::copy(localResult.begin(), localResult.end(),
-			std::back_inserter(result));
-	}
-
-	return result;
-}
-
-bool search(const std::string& data, const std::string& searchText)
-{
-	if (data.find(searchText) != std::string::npos)
-	{
-		return true;
-	}
-
-	return false;
-}
-
-/*static*/ WebSite::CreateCallback WebSite::sCreateCallback = nullptr;
-/*static*/ WebSite::ChangeStatusCallback WebSite::sChangeStatusCallback = nullptr;
-
-/*static*/ bool WebSite::isValidHRef(const std::string& str)
-{
-	auto result = std::regex_match(str, std::regex("(http|https)://([^/ :]+):?([^/ ]*)(/?[^ #?]*)\\x3f?([^ #]*)#?([^ ]*)"));
-	return result;
-}
-
-/*static*/ void WebSite::setCreateCallback(CreateCallback callback)
-{
-	sCreateCallback = callback;
-}
-
-/*static*/ void WebSite::setChangeStatusCallback(ChangeStatusCallback callback)
-{
-	sChangeStatusCallback = callback;
-}
-
-/*static*/ void WebSite::callCreateCallback(const std::string& url)
-{
-	if (sCreateCallback != nullptr)
-	{
-		sCreateCallback(url);
+		parse(n);
 	}
 }
 
-/*static*/ void WebSite::callChangeStatusCallback(const std::string& url,
-												const WebSiteStatus status,
-												const std::string& error)
+void WebSite::callCallback()
 {
-	if (sChangeStatusCallback != nullptr)
+	if (mChangeStatusCallback !=  nullptr)
 	{
-		sChangeStatusCallback(url, status, error);
+		mChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
 	}
 }
 
-std::vector<std::string> WebSite::getChildUrls() const
+void WebSite::removeHtmlComments()
 {
-	if (mStatus == WebSiteStatus::FAILED)
+	while (mData.find("<!--") != std::string::npos)
 	{
-		return {};
-	}
+		auto startpos = mData.find("<!--");
+		auto endpos = mData.find("-->") + 3;
 
-	mParsed = true;
-	result.wait();
-
-	if (result.valid())
-	{
-		auto str = result.get();
-		mStatus = WebSiteStatus::PARSE;
-		WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-
-		try
+		if (endpos != std::string::npos)
 		{
-			rapidxml::xml_document<> xmlDoc;
-			xmlDoc.parse<rapidxml::parse_default>(const_cast<char*>(str.c_str()));
-
-			auto children = std::move(walk(xmlDoc.first_node(), mData));
-
-			mStatus = WebSiteStatus::PARSED;
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-
-			return children;
-		}
-		catch (const std::exception& e)
-		{
-			mStatus = WebSiteStatus::FAILED;
-			mErrorDescripton = e.what();
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-
-			return {};
+			mData = mData.erase(startpos, endpos - startpos);
 		}
 	}
-
-	mStatus = WebSiteStatus::FAILED;
-	WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-
-	return {};
 }
 
-void WebSite::searchText(const std::string& searchText, FoundCallback callback)
+void WebSite::searchText()
 {
-	mFoundCallback = callback;
 	if (mStatus == WebSiteStatus::FAILED)
 	{
 		return;
 	}
 
-	if (!mParsed)
+	mStatus = WebSiteStatus::SEARCH;
+	callCallback();
+	try
 	{
-		getChildUrls();
-		mParsed = true;
+		if (mParsedData.find(mSearchText) != std::string::npos)
+		{
+			mStatus = WebSiteStatus::FOUND;
+		}
+		else
+		{
+			mStatus = WebSiteStatus::NOT_FOUND;
+		}
+		callCallback();
+	}
+	catch (const std::exception& e)
+	{
+		mStatus = WebSiteStatus::FAILED;
+		mErrorDescripton = e.what();
+		callCallback();
+	}
+}
+
+WebSite::Children& WebSite::getChildren()
+{
+	return mChildren;
+}
+
+const std::string& WebSite::getUrl() const
+{
+	return mUrl;
+}
+
+bool WebSite::parse()
+{
+	if (mStatus == WebSiteStatus::FAILED)
+	{
+		return false;
 	}
 
-	auto result = mThreadPool->enqueue([&, searchText]()
+	try
 	{
-		try
-		{
-			mStatus = WebSiteStatus::SEARCH;
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-			if (search(mData, searchText))
-			{
-				mStatus = WebSiteStatus::FOUND;
-				WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-			}
-			else
-			{
-				mStatus = WebSiteStatus::NOT_FOUND;
-				WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-			}
+		mStatus = WebSiteStatus::PARSE;
+		callCallback();
+		rapidxml::xml_document<> xmlDoc;
+		xmlDoc.parse<rapidxml::parse_default>(const_cast<char*>(mData.c_str()));
 
-			mFoundCallback(mProgress);
-		}
-		catch (const std::exception& e)
-		{
-			mStatus = WebSiteStatus::FAILED;
-			mErrorDescripton = e.what();
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
+		parse(xmlDoc.first_node());
+		mStatus = WebSiteStatus::PARSED;
+		callCallback();
 
-			return;
-		}
-	});
+		return true;
+	}
+	catch (const std::exception& e)
+	{
+		mStatus = WebSiteStatus::FAILED;
+		mErrorDescripton = e.what();
+		callCallback();
+
+		return false;
+	}
 }
 
-void WebSite::load(LoadedCallback callback)
+bool WebSite::load()
 {
-	mLoadedCallback = callback;
-	WebSite::callCreateCallback(mUrl);
-	result = mThreadPool->enqueue([&] {
-		try
-		{
-			mStatus = WebSiteStatus::LOAD;
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-			UrlLoadTask task;
-			std::string data;
-			data = std::move(task.load(mUrl));
-			mStatus = WebSiteStatus::LOADED;
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
+	try
+	{
+		mStatus = WebSiteStatus::LOAD;
+		callCallback();
+		UrlLoadTask task;
+		task.load(mUrl, mData);
+		mStatus = WebSiteStatus::LOADED;
+		callCallback();
 
-			mLoadedCallback(mProgress);
+		removeHtmlComments();
 
-			return data;
-		}
-		catch (const std::exception&)
-		{
-			mStatus = WebSiteStatus::FAILED;
-			WebSite::callChangeStatusCallback(mUrl, mStatus, mErrorDescripton);
-		}
-	});
+		return true;
+	}
+	catch (const std::exception& e)
+	{
+		mStatus = WebSiteStatus::FAILED;
+		mErrorDescripton = e.what();
+		callCallback();
+
+		return false;
+	}
 }
 
-WebSite::WebSite(ThreadPool::Ptr threadPool,
-				const std::string& url,
-				const float progress)
-	: mThreadPool(threadPool)
-	, mUrl(url)
-	, mParsed(false)
-	, mProgress(progress)
+WebSite::WebSite(const std::string& url,
+				const std::string& searchText,
+				ChangeStatusCallback callback)
+	: mUrl(url)
+	, mChangeStatusCallback(callback)
+	, mSearchText(searchText)
 {
+	mStatus = WebSiteStatus::CREATED;
+	callCallback();
 }

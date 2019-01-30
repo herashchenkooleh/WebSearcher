@@ -19,7 +19,9 @@ public:
 
 	static int writer(char *data, size_t size, size_t nmemb, std::string* writerData);
 
-	std::string load(const std::string& url);
+	void load(const std::string& url, std::string& data);
+
+	static void init();
 
 protected:
 	void init(const std::string& url, std::string* buffer);

@@ -76,6 +76,9 @@ void SearchManager::changeSlot(const QString& url,
 	case WebSite::WebSiteStatus::LOAD:
 		item->setStatus("load");
 		break;
+	case WebSite::WebSiteStatus::LOADED:
+		item->setStatus("loaded");
+		break;
 	case WebSite::WebSiteStatus::PARSE:
 		item->setStatus("parse");
 		break;

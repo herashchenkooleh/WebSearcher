@@ -10,41 +10,24 @@ UrlLoadTask::~UrlLoadTask()
 {
 }
 
-std::string UrlLoadTask::load(const std::string& url)
+void UrlLoadTask::load(const std::string& url, std::string& data)
 {
 	if (url.empty())
 	{
-		return "";
+		return;
 	}
 
-	curl_global_init(CURL_GLOBAL_DEFAULT);
-
-	std::string buffer;
-	try
-	{
-		init(url, &buffer);
-	}
-	catch (const std::exception& e)
-	{
-		std::cout << "cUrl error: " << e.what() << std::endl;
-
-		return "";
-	}
+	init(url, &data);
 
 	auto code = curl_easy_perform(mConnect);
 	curl_easy_cleanup(mConnect);
-
 	if (code != CURLE_OK)
 	{
 		std::stringstream ss;
-		ss << "Failed to get " << mErrorBuffer;
+		ss << "Failed curl " << mErrorBuffer;
 
-		std::cout << "cUrl error: " << ss.str() << std::endl;
-
-		return "";
+		throw std::runtime_error(ss.str());
 	}
-
-	return buffer;
 }
 
 void UrlLoadTask::init(const std::string& url, std::string* buffer)
@@ -102,4 +85,9 @@ void UrlLoadTask::init(const std::string& url, std::string* buffer)
 	writerData->append(data, size*nmemb);
 
 	return size * nmemb;
+}
+
+/*static*/ void UrlLoadTask::init()
+{
+	curl_global_init(CURL_GLOBAL_ALL);
 }
